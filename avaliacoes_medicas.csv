@@ -1,4 +1,4 @@
-caso_id,nota_A,nota_B
-4754,0,0
-4774,0,0
-4824,0,0
+especialista_id,caso_id,nota_A,nota_B
+arthur,4754,0,0
+arthur,4774,0,0
+arthur,4824,0,0
