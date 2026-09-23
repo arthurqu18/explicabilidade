@@ -53,6 +53,33 @@ if not casos:
     st.error(f"Arquivo '{DATA_FILE}' não encontrado ou vazio.")
     st.stop()
 
+def obter_casos_avaliados(medico_id_str):
+    """Retorna um conjunto (set) com os caso_id já avaliados pelo especialista."""
+    if os.path.exists(RESULTS_FILE):
+        df = pd.read_csv(RESULTS_FILE)
+        if "especialista_id" in df.columns and "caso_id" in df.columns:
+            df_medico = df[df["especialista_id"].astype(str) == str(medico_id_str)]
+            return set(df_medico["caso_id"].tolist())
+    return set()
+
+casos_avaliados = obter_casos_avaliados(medico_id.strip())
+
+# Chave de controle de sessão para saber qual médico está logado
+if "medico_atual" not in st.session_state or st.session_state.medico_atual != medico_id.strip():
+    st.session_state.medico_atual = medico_id.strip()
+    
+    # Busca o primeiro caso do JSON que o médico AINDA NÃO avaliou
+    primeiro_pendente = 0
+    for idx_c, c in enumerate(casos):
+        if c["caso_id"] not in casos_avaliados:
+            primeiro_pendente = idx_c
+            break
+    else:
+        # Se ele já avaliou TODOS os casos do JSON
+        primeiro_pendente = len(casos) - 1
+
+    st.session_state.current_index = primeiro_pendente
+
 total_casos_disponiveis = len(casos)
 idx = st.session_state.current_index
 caso_atual = casos[idx]
@@ -71,12 +98,12 @@ def calcular_estatisticas_moe(medico_id_str):
     if n < MIN_SAMPLES:
         return {"n": n, "pronto": False}
 
-    # Erros absolutos em relação à nota ideal (3)
-    erros_A = 3 - df_medico["nota_A"]
-    erros_B = 3 - df_medico["nota_B"]
+    # Erros absolutos normalizados entre 0.0 e 1.0 - NMAE
+    erros_A = (3 - df_medico["nota_A"]) / 3
+    erros_B = (3 - df_medico["nota_B"]) / 3
 
     mae_A = erros_A.mean()
-    mae_B = erros_B.mean()
+    mae_B = erros_B.mean()  
 
     var_A = erros_A.var(ddof=1) if n > 1 else 0
     var_B = erros_B.var(ddof=1) if n > 1 else 0
@@ -131,8 +158,12 @@ else:
 # --- CABEÇALHO E PROGRESSO ---
 st.title("🩺 Avaliação de Narrativas Clínicas (IA)")
 st.progress((idx + 1) / total_casos_disponiveis)
+
+ja_respondido = caso_atual["caso_id"] in casos_avaliados
+status_texto = " - Caso já avaliado." if ja_respondido else ""
+
 st.caption(
-    f"Avaliador: **{medico_id}** | Caso {idx + 1} de {total_casos_disponiveis} | ID do Paciente: {caso_atual['caso_id']}"
+    f"Avaliador: **{medico_id}** | Caso {idx + 1} de {total_casos_disponiveis} | ID do Paciente: {caso_atual['caso_id']}{status_texto}"
 )
 
 # Alerta caso o critério de confiança estatística já tenha sido atingido
@@ -144,12 +175,32 @@ if stats and stats["pronto"]:
 st.markdown("---")
 
 # --- GUIA DE PONTUAÇÃO ---
-with st.expander("📌 Critérios de Pontuação (0 a 3)"):
+# --- GUIA DE INSTRUÇÕES E PONTUAÇÃO ---
+with st.expander(
+    "ℹ️ Instruções de Avaliação e Critérios de Pontuação (0 a 3)",
+    expanded=False,
+):
     st.markdown("""
-    * **0 (Incoerente):** A narrativa alucina, erra dados do SHAP/SHAP-IQ ou apoia-se em premissas clinicamente absurdas.[cite: 2]
-    * **1 (Fraca):** Traduz o SHAP, mas falha em conectar os achados com a gravidade do paciente.[cite: 2]
-    * **2 (Boa):** Explica corretamente as atribuições de risco do SHAP e mantém coerência fisiológica.[cite: 2]
-    * **3 (Excelente):** Identifica perfeitamente a dinâmica clínica (ex: detecta outliers ou integra múltiplos marcadores).[cite: 2]
+    ### **Objetivo:**
+    Avaliar a qualidade e utilidade clínica da narrativa gerada por IA ao traduzir os fatores de decisão (**SHAP / SHAP-IQ**) dos modelos **XGBoost** e **TabPFN**.
+
+    ---
+    ### **Significado dos Valores do SHAP:**
+    * **SHAP Positivo (> 0):** **Fator de Risco** — Aumenta a probabilidade prevista de **óbito**.
+    * **SHAP Negativo (< 0):** **Fator Protetor** — Reduz a probabilidade de óbito (favorece a **sobrevida**).
+
+    ---
+    ### **O que avaliar em cada texto?**
+    * **Precisão dos Dados e Direção:** A narrativa respeita a direção do SHAP? (Exemplo: se a Idade tem SHAP +1.1849, o texto trata a idade como um fator de risco de óbito? Se tem SHAP -0.0978, trata-a como fator protetor/redutor de risco?).
+    * **Coerência Fisiológica:** O texto faz sentido do ponto de vista médico? (Exemplo: Reconhece que creatinina alta e ureia elevada juntas representam um quadro de disfunção renal?).
+    * **Síntese Clínica:** A síntese clínica consegue captar corretamente o motivo pelo qual o modelo errou ou acertou?
+
+    ---
+    ### **Régua de Pontuação:**
+    * **0 (Incoerente):** A narrativa alucina, erra os dados do SHAP ou apoia-se em premissas clinicamente absurdas.
+    * **1 (Fraca):** Apenas traduz os números do SHAP, mas falha em conectar os achados com a gravidade clínica do paciente.
+    * **2 (Boa):** Explica corretamente as atribuições de risco e mantém coerência fisiológica.
+    * **3 (Excelente):** Identifica perfeitamente a dinâmica clínica (ex.: deteta quando o modelo foi enganado por um marcador isolado ou quando integrou múltiplos fatores de forma robusta).
     """)
 
 # --- COMPARAÇÃO LADO A LADO ---
